@@ -1,10 +1,13 @@
-# vulkan-water
+# Vulkan Water Renderer
 
 A C++/Vulkan port of Evan Wallace's classic **WebGL Water** demo.
 
 Heightfield water simulated on the GPU with raytraced reflection/refraction,
 real-time caustics, soft sphere shadows, switchable box/cylinder pools, and
 optional glTF object loading.
+
+## Screenshot
+![Screenshot](screenshot.png) 
 
 ## Zero dependencies
 
@@ -83,3 +86,13 @@ shaders/         GLSL (compiled to SPIR-V at build time)
 Algorithm and look ported from Evan Wallace's WebGL Water
 (<https://madebyevan.com/webgl-water/>). This is an independent Vulkan
 reimplementation.
+
+## License
+
+MIT
+
+## Support
+
+If you found this project interesting or useful, you can support my work:
+
+[![GitHub Sponsors](https://img.shields.io/github/sponsors/makarov-mm?style=flat&logo=github)](https://github.com/sponsors/makarov-mm)
