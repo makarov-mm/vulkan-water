@@ -707,7 +707,7 @@ private:
         std::vector<glm::vec3> L(vc);
         for(size_t i=0;i<vc;++i) L[i]=(P[i]-bsCenter)*s;
         glm::vec3 lmn(1e9f),lmx(-1e9f); for(auto& p:L){ lmn=glm::min(lmn,p); lmx=glm::max(lmx,p); }
-        const int UDF_RES=48;
+        const int UDF_RES=64;
         glm::vec3 ext=lmx-lmn; float vox=std::max(ext.x,std::max(ext.y,ext.z))/(float)UDF_RES;
         lmn=lmn-glm::vec3(2.0f*vox); lmx=lmx+glm::vec3(2.0f*vox);   // pad so the surface has gradient room
         std::cerr<<"baking object SDF "<<UDF_RES<<"^3 ...\n";

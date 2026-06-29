@@ -24,20 +24,13 @@ vec3 getSphereColor(vec3 point) {
 
 // generic loaded-object shading (glTF) using an interpolated surface normal
 vec3 getObjectColor(vec3 point, vec3 n) {
-    vec3 color = vec3(0.5);
-    color *= 1.0 - 0.6 / pow((point.y + 1.0 + sphereRadius) / sphereRadius, 3.0);
-
+    // smooth shading for the refracted underwater object: ambient + diffuse, no
+    // high-frequency caustic sampling (which aliases badly on a curved surface).
+    vec3 base = vec3(0.55);
+    base *= 1.0 - 0.5 / pow((point.y + 1.0 + sphereRadius) / sphereRadius, 3.0);
     vec3 refractedLight = refract(-LIGHT, vec3(0.0, 1.0, 0.0), IOR_AIR / IOR_WATER);
-    float diffuse = max(0.0, dot(-refractedLight, n)) * 0.5;
-
-    vec4 info = texture(waterTex, point.xz * 0.5 + 0.5);
-    if (point.y < info.r) {
-        vec4 caustic = texture(causticTex,
-            0.75 * (point.xz - point.y * refractedLight.xz / refractedLight.y) * 0.5 + 0.5);
-        diffuse *= caustic.r * 4.0;
-    }
-    color += diffuse;
-    return color;
+    float diffuse = max(0.0, dot(-refractedLight, n));
+    return base * (0.55 + 0.6 * diffuse);
 }
 
 // textured object shading: base colour from the glTF texture, lit + caustics
@@ -123,21 +116,26 @@ float traceObject(vec3 o, vec3 r, out vec3 hitNormal) {
     if (tb.y < 0.0 || tb.x > tb.y) return -1.0;
     float vox = max(u.objMax.w, 1e-4);
     float t = max(tb.x, 0.0);
-    for (int i = 0; i < 128; ++i) {
+    bool hit = false;
+    for (int i = 0; i < 200; ++i) {
         vec3 p = o + r * t;
         float d = udfAt(p);
-        if (d < vox) {
-            float e = vox;
-            hitNormal = normalize(vec3(
-                udfAt(p + vec3(e,0,0)) - udfAt(p - vec3(e,0,0)),
-                udfAt(p + vec3(0,e,0)) - udfAt(p - vec3(0,e,0)),
-                udfAt(p + vec3(0,0,e)) - udfAt(p - vec3(0,0,e))));
-            return t;
-        }
-        t += max(d, vox * 0.5);
-        if (t > tb.y) break;
+        if (d < vox * 0.2) { hit = true; break; }     // precise convergence -> stable hit
+        t += d;                                        // true distance step (no overshoot, low jitter)
+        if (t > tb.y) return -1.0;
     }
-    return -1.0;
+    if (!hit && t > tb.y) return -1.0;                 // grazing: accept the last in-box position
+    vec3 p = o + r * t;
+    // smooth tetrahedron-gradient normal (4 taps) over one voxel
+    float e = vox;
+    vec2 k = vec2(1.0, -1.0);
+    vec3 grad = k.xyy * udfAt(p + k.xyy * e)
+              + k.yyx * udfAt(p + k.yyx * e)
+              + k.yxy * udfAt(p + k.yxy * e)
+              + k.xxx * udfAt(p + k.xxx * e);
+    float gl = length(grad);
+    hitNormal = (gl > 1e-5) ? grad / gl : -normalize(r);
+    return t;
 }
 
 vec3 getSurfaceRayColor(vec3 origin, vec3 ray, vec3 waterColor) {
