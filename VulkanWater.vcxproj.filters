@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files"><UniqueIdentifier>{713A1CF8-C185-4745-BB41-6F44A018D9CA}</UniqueIdentifier></Filter>
+    <Filter Include="Header Files"><UniqueIdentifier>{E3BA47BD-0B5E-4187-88F1-933EEE0A1700}</UniqueIdentifier></Filter>
+    <Filter Include="Shaders"><UniqueIdentifier>{90A535FA-DF67-402C-BC43-7F5F9D8D35B5}</UniqueIdentifier></Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="src\math3d.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\gltf_min.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="shaders\common.glsl"><Filter>Shaders</Filter></None>
+    <None Include="shaders\shading.glsl"><Filter>Shaders</Filter></None>
+    <None Include="README.md" />
+  </ItemGroup>
+  <ItemGroup>
+    <ShaderVert Include="shaders\caustics.vert"><Filter>Shaders</Filter></ShaderVert>
+    <ShaderVert Include="shaders\fullscreen.vert"><Filter>Shaders</Filter></ShaderVert>
+    <ShaderVert Include="shaders\object.vert"><Filter>Shaders</Filter></ShaderVert>
+    <ShaderVert Include="shaders\pool.vert"><Filter>Shaders</Filter></ShaderVert>
+    <ShaderVert Include="shaders\sphere.vert"><Filter>Shaders</Filter></ShaderVert>
+    <ShaderVert Include="shaders\water_surface.vert"><Filter>Shaders</Filter></ShaderVert>
+    <ShaderFrag Include="shaders\caustics.frag"><Filter>Shaders</Filter></ShaderFrag>
+    <ShaderFrag Include="shaders\object.frag"><Filter>Shaders</Filter></ShaderFrag>
+    <ShaderFrag Include="shaders\pool.frag"><Filter>Shaders</Filter></ShaderFrag>
+    <ShaderFrag Include="shaders\sphere.frag"><Filter>Shaders</Filter></ShaderFrag>
+    <ShaderFrag Include="shaders\water_drop.frag"><Filter>Shaders</Filter></ShaderFrag>
+    <ShaderFrag Include="shaders\water_normal.frag"><Filter>Shaders</Filter></ShaderFrag>
+    <ShaderFrag Include="shaders\water_sphere.frag"><Filter>Shaders</Filter></ShaderFrag>
+    <ShaderFrag Include="shaders\water_surface.frag"><Filter>Shaders</Filter></ShaderFrag>
+    <ShaderFrag Include="shaders\water_update.frag"><Filter>Shaders</Filter></ShaderFrag>
+  </ItemGroup>
+</Project>
