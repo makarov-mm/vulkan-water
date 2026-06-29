@@ -11,6 +11,8 @@
   <ItemGroup>
     <ClInclude Include="src\math3d.h"><Filter>Header Files</Filter></ClInclude>
     <ClInclude Include="src\gltf_min.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\udf_bake.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\png_decode.h"><Filter>Header Files</Filter></ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="shaders\common.glsl"><Filter>Shaders</Filter></None>

@@ -14,6 +14,8 @@ layout(set = 0, binding = 0) uniform SceneUBO {
     vec4 light;   // xyz = normalized direction TOWARDS the light
     vec4 sphere;  // xyz = proxy center, w = proxy radius
     vec4 misc;    // x = time, y = poolShape (0 = box, 1 = cylinder)
+    vec4 objMin;  // xyz = world AABB min of the loaded object, w = hasObject (1/0)
+    vec4 objMax;  // xyz = world AABB max of the loaded object, w = voxel size (world units)
 } u;
 
 #define EYE          (u.eye.xyz)
@@ -25,6 +27,8 @@ layout(set = 0, binding = 0) uniform SceneUBO {
 layout(set = 0, binding = 1) uniform sampler2D waterTex;   // r=height g=velocity ba=normal.xz
 layout(set = 0, binding = 2) uniform sampler2D causticTex; // r=intensity
 layout(set = 0, binding = 3) uniform sampler2D tilesTex;   // pool tile texture
+layout(set = 0, binding = 4) uniform sampler3D udfTex;     // unsigned distance field of the loaded object (world units)
+layout(set = 0, binding = 5) uniform sampler2D objTex;     // base-colour texture of the loaded object
 
 vec2 intersectCube(vec3 origin, vec3 ray, vec3 cubeMin, vec3 cubeMax) {
     vec3 tMin = (cubeMin - origin) / ray;

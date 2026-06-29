@@ -3,7 +3,9 @@
 #include "shading.glsl"
 layout(location = 0) in  vec3 vWorld;
 layout(location = 1) in  vec3 vNormal;
+layout(location = 2) in  vec2 vUV;
 layout(location = 0) out vec4 outColor;
 void main() {
-    outColor = vec4(getObjectColor(vWorld, normalize(vNormal)), 1.0);
+    vec3 albedo = texture(objTex, vUV).rgb;          // white default when the object is untextured
+    outColor = vec4(getObjectColorTex(vWorld, normalize(vNormal), albedo), 1.0);
 }

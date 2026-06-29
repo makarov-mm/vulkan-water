@@ -1,13 +1,10 @@
-# Vulkan Water Renderer
+# vulkan-water
 
 A C++/Vulkan port of Evan Wallace's classic **WebGL Water** demo.
 
 Heightfield water simulated on the GPU with raytraced reflection/refraction,
 real-time caustics, soft sphere shadows, switchable box/cylinder pools, and
 optional glTF object loading.
-
-## Screenshot
-![Screenshot](screenshot.png) 
 
 ## Zero dependencies
 
@@ -20,6 +17,8 @@ The only external requirement is the **Vulkan SDK** (the loader + the
 | Vulkan surface     | GLFW          | `vkCreateWin32SurfaceKHR` (`VK_KHR_win32_surface`) |
 | Vector / matrix    | GLM           | `src/math3d.h` (own, column-major, Vulkan ZO depth) |
 | glTF / GLB parsing | cgltf         | `src/gltf_min.h` (own JSON + accessor reader) |
+| PNG decoding       | stb_image     | `src/png_decode.h` (own DEFLATE inflate + unfilter) |
+| Mesh refraction    | —             | `src/udf_bake.h` (own distance-field baker) |
 | Vulkan bootstrap   | vk-bootstrap  | hand-rolled instance/device/swapchain |
 | Memory allocation  | VMA           | hand-rolled allocator (`findMemoryType`) |
 
@@ -56,8 +55,10 @@ water.exe model.gltf      :: also load a glTF/GLB object into the pool
 ```
 
 `.gltf` (with an external or base64 `.bin`) and binary `.glb` are both
-supported; POSITION, optional NORMAL and indices of the first mesh primitive
-are read. If normals are absent they are generated.
+supported; POSITION, optional NORMAL/TEXCOORD_0 and indices of the first mesh
+primitive are read, along with the base-colour texture (PNG). The loaded object
+is baked into a distance field so the water refracts and reflects its real
+shape (not a bounding sphere) when it is under the surface.
 
 ## Controls
 
@@ -75,10 +76,12 @@ are read. If normals are absent they are generated.
 ## Project layout
 
 ```
-src/main.cpp     Vulkan host: Win32 window, sim/caustic/main passes, physics
-src/math3d.h     own vec2/vec3/vec4/mat4 (replaces GLM)
-src/gltf_min.h   own glTF/GLB loader (replaces cgltf)
-shaders/         GLSL (compiled to SPIR-V at build time)
+src/main.cpp      Vulkan host: Win32 window, sim/caustic/main passes, physics
+src/math3d.h      own vec2/vec3/vec4/mat4 (replaces GLM)
+src/gltf_min.h    own glTF/GLB loader (replaces cgltf)
+src/png_decode.h  own PNG decoder: DEFLATE inflate + unfilter (replaces stb_image)
+src/udf_bake.h    own unsigned-distance-field baker (object refraction proxy)
+shaders/          GLSL (compiled to SPIR-V at build time)
 ```
 
 ## Credit
@@ -86,13 +89,3 @@ shaders/         GLSL (compiled to SPIR-V at build time)
 Algorithm and look ported from Evan Wallace's WebGL Water
 (<https://madebyevan.com/webgl-water/>). This is an independent Vulkan
 reimplementation.
-
-## License
-
-MIT
-
-## Support
-
-If you found this project interesting or useful, you can support my work:
-
-[![GitHub Sponsors](https://img.shields.io/github/sponsors/makarov-mm?style=flat&logo=github)](https://github.com/sponsors/makarov-mm)

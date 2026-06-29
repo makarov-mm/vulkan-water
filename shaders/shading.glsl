@@ -40,6 +40,19 @@ vec3 getObjectColor(vec3 point, vec3 n) {
     return color;
 }
 
+// textured object shading: base colour from the glTF texture, lit + caustics
+vec3 getObjectColorTex(vec3 point, vec3 n, vec3 albedo) {
+    vec3 refractedLight = refract(-LIGHT, vec3(0.0, 1.0, 0.0), IOR_AIR / IOR_WATER);
+    float diffuse = max(0.0, dot(-refractedLight, n)) * 0.5;
+    vec4 info = texture(waterTex, point.xz * 0.5 + 0.5);
+    if (point.y < info.r) {
+        vec4 caustic = texture(causticTex,
+            0.75 * (point.xz - point.y * refractedLight.xz / refractedLight.y) * 0.5 + 0.5);
+        diffuse *= caustic.r * 4.0;
+    }
+    return albedo * (0.6 + diffuse);                 // ambient term + lit/caustic diffuse
+}
+
 vec3 getWallColor(vec3 point) {
     float scale = 0.5;
     vec3 wallColor;
@@ -95,19 +108,59 @@ vec3 getSkyColor(vec3 ray) {
     return col;
 }
 
+// ---- loaded-object refraction via an unsigned distance field (3D texture) ----
+// The object is baked into udfTex; world-space AABB is u.objMin/u.objMax.xyz,
+// voxel size in u.objMax.w. Distances are stored in WORLD units.
+float udfAt(vec3 p) {
+    vec3 c = (p - u.objMin.xyz) / max(u.objMax.xyz - u.objMin.xyz, vec3(1e-6));
+    if (any(lessThan(c, vec3(0.0))) || any(greaterThan(c, vec3(1.0)))) return 1e3;
+    return texture(udfTex, c).r;
+}
+// sphere-trace the UDF from outside; returns ray t of the surface hit, or -1.
+float traceObject(vec3 o, vec3 r, out vec3 hitNormal) {
+    hitNormal = vec3(0.0, 1.0, 0.0);
+    vec2 tb = intersectCube(o, r, u.objMin.xyz, u.objMax.xyz);
+    if (tb.y < 0.0 || tb.x > tb.y) return -1.0;
+    float vox = max(u.objMax.w, 1e-4);
+    float t = max(tb.x, 0.0);
+    for (int i = 0; i < 128; ++i) {
+        vec3 p = o + r * t;
+        float d = udfAt(p);
+        if (d < vox) {
+            float e = vox;
+            hitNormal = normalize(vec3(
+                udfAt(p + vec3(e,0,0)) - udfAt(p - vec3(e,0,0)),
+                udfAt(p + vec3(0,e,0)) - udfAt(p - vec3(0,e,0)),
+                udfAt(p + vec3(0,0,e)) - udfAt(p - vec3(0,0,e))));
+            return t;
+        }
+        t += max(d, vox * 0.5);
+        if (t > tb.y) break;
+    }
+    return -1.0;
+}
+
 vec3 getSurfaceRayColor(vec3 origin, vec3 ray, vec3 waterColor) {
     vec3 color;
-    float q = intersectSphere(origin, ray, sphereCenter, sphereRadius);
-    if (q < 1.0e6) {
-        color = getSphereColor(origin + ray * q);
-    } else if (ray.y < 0.0) {
-        vec2 t = intersectPool(origin, ray);
-        color = getWallColor(origin + ray * t.y);
-    } else {
-        vec2 t = intersectPool(origin, ray);
-        vec3 hit = origin + ray * t.y;
-        if (hit.y < 2.0 / 12.0) color = getWallColor(hit);
-        else                    color = getSkyColor(ray);
+    bool hit = false;
+    if (u.objMin.w > 0.5) {                       // a glTF object is loaded -> trace its real geometry
+        vec3 n;
+        float to = traceObject(origin, ray, n);
+        if (to > 0.0) { color = getObjectColor(origin + ray * to, n); hit = true; }
+    } else {                                       // built-in ball -> analytic sphere
+        float q = intersectSphere(origin, ray, sphereCenter, sphereRadius);
+        if (q < 1.0e6) { color = getSphereColor(origin + ray * q); hit = true; }
+    }
+    if (!hit) {
+        if (ray.y < 0.0) {
+            vec2 t = intersectPool(origin, ray);
+            color = getWallColor(origin + ray * t.y);
+        } else {
+            vec2 t = intersectPool(origin, ray);
+            vec3 h = origin + ray * t.y;
+            if (h.y < 2.0 / 12.0) color = getWallColor(h);
+            else                  color = getSkyColor(ray);
+        }
     }
     if (ray.y < 0.0) color *= waterColor;
     return color;

@@ -15,7 +15,9 @@ namespace gltfmin {
 struct Result {
     std::vector<float>    positions;   // xyz * N
     std::vector<float>    normals;     // xyz * N (empty if absent)
+    std::vector<float>    uvs;         // uv  * N (empty if absent)
     std::vector<uint32_t> indices;     // empty if non-indexed
+    std::vector<uint8_t>  baseColorImage;  // raw encoded bytes of the base-colour texture (PNG/JPEG), empty if none
     bool ok=false;
     std::string error;
 };
@@ -200,9 +202,30 @@ inline Result load(const std::string& path){
         }
         return true;
     };
+    auto readVec2=[&](int accIdx, std::vector<float>& out)->bool{
+        const JVal& acc=accessors->arr[accIdx];
+        int bvIdx=getInt(acc,"bufferView",-1); if(bvIdx<0) return false;
+        int count=getInt(acc,"count",0);
+        int accOff=getInt(acc,"byteOffset",0);
+        const JVal& bv=bufferViews->arr[bvIdx];
+        int bufIdx=getInt(bv,"buffer",0);
+        int bvOff=getInt(bv,"byteOffset",0);
+        int stride=getInt(bv,"byteStride",0); if(stride==0) stride=2*sizeof(float);
+        if(bufIdx>=(int)bufData.size()) return false;
+        const std::vector<uint8_t>& data=bufData[bufIdx];
+        out.resize((size_t)count*2);
+        for(int i=0;i<count;++i){
+            size_t base=(size_t)bvOff+accOff+(size_t)i*stride;
+            if(base+2*sizeof(float)>data.size()) return false;
+            std::memcpy(&out[(size_t)i*2], &data[base], 2*sizeof(float));
+        }
+        return true;
+    };
 
     if(!readVec3(posA->asInt(), R.positions)){ R.error="failed reading POSITION"; return R; }
     if(nrmA) readVec3(nrmA->asInt(), R.normals);
+    const JVal* uvA = attribs->find("TEXCOORD_0");
+    if(uvA) readVec2(uvA->asInt(), R.uvs);
 
     if(idxA){
         const JVal& acc=accessors->arr[idxA->asInt()];
@@ -226,6 +249,42 @@ inline Result load(const std::string& path){
                 else if(ct==5123){ uint16_t s; std::memcpy(&s,&data[base],2); v=s; }
                 else             { std::memcpy(&v,&data[base],4); }
                 R.indices[i]=v;
+            }
+        }
+    }
+    // ---- base-colour texture bytes (optional): material -> texture -> image ----
+    {
+        const JVal* materials=root.find("materials");
+        const JVal* textures =root.find("textures");
+        const JVal* images   =root.find("images");
+        int matIdx=getInt(prim,"material",-1);
+        if(matIdx>=0 && materials && matIdx<(int)materials->arr.size() && textures && images){
+            const JVal* pbr=materials->arr[matIdx].find("pbrMetallicRoughness");
+            const JVal* bct=pbr ? pbr->find("baseColorTexture") : nullptr;
+            int texIdx=bct ? getInt(*bct,"index",-1) : -1;
+            if(texIdx>=0 && texIdx<(int)textures->arr.size()){
+                int imgIdx=getInt(textures->arr[texIdx],"source",-1);
+                if(imgIdx>=0 && imgIdx<(int)images->arr.size()){
+                    const JVal& img=images->arr[imgIdx];
+                    const JVal* uri=img.find("uri");
+                    if(uri){
+                        const std::string& u=uri->str;
+                        if(u.rfind("data:",0)==0){ size_t c=u.find("base64,"); if(c!=std::string::npos) R.baseColorImage=base64Decode(u.substr(c+7)); }
+                        else R.baseColorImage=readFile(dir+u);
+                    } else {
+                        int bvIdx=getInt(img,"bufferView",-1);
+                        if(bvIdx>=0 && bvIdx<(int)bufferViews->arr.size()){
+                            const JVal& bv=bufferViews->arr[bvIdx];
+                            int bufIdx=getInt(bv,"buffer",0);
+                            int bvOff=getInt(bv,"byteOffset",0), bvLen=getInt(bv,"byteLength",0);
+                            if(bufIdx<(int)bufData.size()){
+                                const std::vector<uint8_t>& data=bufData[bufIdx];
+                                if((size_t)bvOff+bvLen<=data.size())
+                                    R.baseColorImage.assign(data.begin()+bvOff, data.begin()+bvOff+bvLen);
+                            }
+                        }
+                    }
+                }
             }
         }
     }

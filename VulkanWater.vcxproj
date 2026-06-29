@@ -92,6 +92,8 @@
   <ItemGroup>
     <ClInclude Include="src\math3d.h" />
     <ClInclude Include="src\gltf_min.h" />
+    <ClInclude Include="src\udf_bake.h" />
+    <ClInclude Include="src\png_decode.h" />
   </ItemGroup>
 
   <ItemGroup>

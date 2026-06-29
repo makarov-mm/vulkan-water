@@ -17,6 +17,8 @@
 
 #include "math3d.h"
 #include "gltf_min.h"
+#include "udf_bake.h"
+#include "png_decode.h"
 
 #include <vector>
 #include <array>
@@ -52,7 +54,9 @@ struct SceneUBO {
     glm::vec4 eye;
     glm::vec4 light;
     glm::vec4 sphere;
-    glm::vec4 misc;   // x=time, y=poolShape
+    glm::vec4 misc;     // x=time, y=poolShape
+    glm::vec4 objMin;   // xyz = world-space AABB min of the object, w = hasObject (1/0)
+    glm::vec4 objMax;   // xyz = world-space AABB max of the object, w = voxel size (world units)
 };
 struct SimPush { glm::vec4 p0; glm::vec4 p1; };
 
@@ -130,6 +134,10 @@ private:
     AllocatedBuffer sphereVB, sphereIB; uint32_t sphereIndexCount=0;
     AllocatedBuffer objectVB, objectIB; uint32_t objectIndexCount=0;
     bool hasObject=false; glm::mat4 objectBaseModel{1.0f};
+    AllocatedImage udf;                 // unsigned distance field of the loaded object (3D)
+    AllocatedImage objTex;              // base-colour texture of the loaded object (2D, RGBA8)
+    glm::vec3 objLocalMin{0.0f}, objLocalMax{0.0f};  // object AABB in object-base space (world = +sphereCenter)
+    float objVoxel=1.0f;
 
     VkCommandPool cmdPool=VK_NULL_HANDLE;
     VkCommandBuffer cmd=VK_NULL_HANDLE;
@@ -391,6 +399,56 @@ private:
         VK_CHECK(vkCreateImageView(device,&v,nullptr,&img.view));
         return img;
     }
+    AllocatedImage createImage3D(uint32_t w,uint32_t h,uint32_t d,VkFormat fmt,VkImageUsageFlags usage){
+        AllocatedImage img; img.format=fmt; img.extent={w,h};
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ici.imageType=VK_IMAGE_TYPE_3D; ici.format=fmt; ici.extent={w,h,d};
+        ici.mipLevels=1; ici.arrayLayers=1; ici.samples=VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling=VK_IMAGE_TILING_OPTIMAL; ici.usage=usage; ici.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;
+        VK_CHECK(vkCreateImage(device,&ici,nullptr,&img.image));
+        VkMemoryRequirements req; vkGetImageMemoryRequirements(device,img.image,&req);
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.allocationSize=req.size; ai.memoryTypeIndex=findMemoryType(req.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VK_CHECK(vkAllocateMemory(device,&ai,nullptr,&img.memory));
+        VK_CHECK(vkBindImageMemory(device,img.image,img.memory,0));
+        VkImageViewCreateInfo v{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        v.image=img.image; v.viewType=VK_IMAGE_VIEW_TYPE_3D; v.format=fmt; v.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+        VK_CHECK(vkCreateImageView(device,&v,nullptr,&img.view));
+        return img;
+    }
+    // build a 3D R32_SFLOAT distance image from float data, left in SHADER_READ_ONLY layout
+    AllocatedImage makeUDFImage(uint32_t res,const std::vector<float>& data){
+        AllocatedImage im=createImage3D(res,res,res,VK_FORMAT_R32_SFLOAT,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        VkDeviceSize bytes=data.size()*sizeof(float);
+        AllocatedBuffer st=createBuffer(bytes,VK_BUFFER_USAGE_TRANSFER_SRC_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        std::memcpy(st.mapped,data.data(),(size_t)bytes);
+        immediateSubmit([&](VkCommandBuffer c){
+            transition(c,im.image,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkBufferImageCopy rg{}; rg.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; rg.imageExtent={res,res,res};
+            vkCmdCopyBufferToImage(c,st.buffer,im.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&rg);
+            transition(c,im.image,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        });
+        destroyBuffer(st);
+        return im;
+    }
+    // build an RGBA8 2D texture from pixel data, left in SHADER_READ_ONLY layout
+    AllocatedImage make2DTexture(uint32_t w,uint32_t h,const std::vector<uint8_t>& rgba){
+        AllocatedImage im=createImage(w,h,VK_FORMAT_R8G8B8A8_UNORM,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,VK_IMAGE_ASPECT_COLOR_BIT);
+        AllocatedBuffer st=createBuffer(rgba.size(),VK_BUFFER_USAGE_TRANSFER_SRC_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        std::memcpy(st.mapped,rgba.data(),rgba.size());
+        immediateSubmit([&](VkCommandBuffer c){
+            transition(c,im.image,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+            VkBufferImageCopy rg{}; rg.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1}; rg.imageExtent={w,h,1};
+            vkCmdCopyBufferToImage(c,st.buffer,im.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&rg);
+            transition(c,im.image,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+        });
+        destroyBuffer(st);
+        return im;
+    }
     void destroyBuffer(AllocatedBuffer& b){ if(b.mapped) vkUnmapMemory(device,b.memory); if(b.buffer) vkDestroyBuffer(device,b.buffer,nullptr); if(b.memory) vkFreeMemory(device,b.memory,nullptr); b={}; }
     void destroyImage(AllocatedImage& im){ if(im.view) vkDestroyImageView(device,im.view,nullptr); if(im.image) vkDestroyImage(device,im.image,nullptr); if(im.memory) vkFreeMemory(device,im.memory,nullptr); im={}; }
 
@@ -510,19 +568,23 @@ private:
         VK_CHECK(vkCreateSampler(device,&si,nullptr,&sampler));
         si.addressModeU=si.addressModeV=si.addressModeW=VK_SAMPLER_ADDRESS_MODE_REPEAT;
         VK_CHECK(vkCreateSampler(device,&si,nullptr,&tileSampler));
-        std::array<VkDescriptorSetLayoutBinding,4> b{}; VkShaderStageFlags vf=VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT;
+        std::array<VkDescriptorSetLayoutBinding,6> b{}; VkShaderStageFlags vf=VK_SHADER_STAGE_VERTEX_BIT|VK_SHADER_STAGE_FRAGMENT_BIT;
         b[0]={0,VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,1,vf,nullptr};
         b[1]={1,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,vf,nullptr};
         b[2]={2,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,vf,nullptr};
         b[3]={3,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,vf,nullptr};
+        b[4]={4,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,vf,nullptr};   // udfTex (sampler3D)
+        b[5]={5,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,vf,nullptr};   // objTex (base colour)
         VkDescriptorSetLayoutCreateInfo l{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO}; l.bindingCount=(uint32_t)b.size(); l.pBindings=b.data();
         VK_CHECK(vkCreateDescriptorSetLayout(device,&l,nullptr,&setLayout));
-        std::array<VkDescriptorPoolSize,2> ps{}; ps[0]={VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,2}; ps[1]={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,6};
+        std::array<VkDescriptorPoolSize,2> ps{}; ps[0]={VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,2}; ps[1]={VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,10};
         VkDescriptorPoolCreateInfo pc{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO}; pc.maxSets=2; pc.poolSizeCount=(uint32_t)ps.size(); pc.pPoolSizes=ps.data();
         VK_CHECK(vkCreateDescriptorPool(device,&pc,nullptr,&descPool));
         uboBuffer=createBuffer(sizeof(SceneUBO),VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         for(int i=0;i<2;++i){ VkDescriptorSetAllocateInfo a{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             a.descriptorPool=descPool; a.descriptorSetCount=1; a.pSetLayouts=&setLayout; VK_CHECK(vkAllocateDescriptorSets(device,&a,&descSet[i])); }
+        udf=makeUDFImage(1,std::vector<float>{1.0e3f});   // default: no object -> far field (never sampled while objMin.w==0)
+        objTex=make2DTexture(1,1,std::vector<uint8_t>{255,255,255,255}); // default: white (no texture -> procedural shading unchanged)
         writeDescriptors();
     }
     void writeDescriptors(){
@@ -531,11 +593,15 @@ private:
             VkDescriptorImageInfo wi{sampler,water[i].view,VK_IMAGE_LAYOUT_GENERAL};
             VkDescriptorImageInfo ci{sampler,caustic.view,VK_IMAGE_LAYOUT_GENERAL};
             VkDescriptorImageInfo ti{tileSampler,tiles.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-            std::array<VkWriteDescriptorSet,4> w{};
+            VkDescriptorImageInfo ui{sampler,udf.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            VkDescriptorImageInfo oi{tileSampler,objTex.view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+            std::array<VkWriteDescriptorSet,6> w{};
             w[0]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w[0].dstSet=descSet[i]; w[0].dstBinding=0; w[0].descriptorCount=1; w[0].descriptorType=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER; w[0].pBufferInfo=&bi;
             w[1]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w[1].dstSet=descSet[i]; w[1].dstBinding=1; w[1].descriptorCount=1; w[1].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[1].pImageInfo=&wi;
             w[2]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w[2].dstSet=descSet[i]; w[2].dstBinding=2; w[2].descriptorCount=1; w[2].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[2].pImageInfo=&ci;
             w[3]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w[3].dstSet=descSet[i]; w[3].dstBinding=3; w[3].descriptorCount=1; w[3].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[3].pImageInfo=&ti;
+            w[4]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w[4].dstSet=descSet[i]; w[4].dstBinding=4; w[4].descriptorCount=1; w[4].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[4].pImageInfo=&ui;
+            w[5]={VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET}; w[5].dstSet=descSet[i]; w[5].dstBinding=5; w[5].descriptorCount=1; w[5].descriptorType=VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[5].pImageInfo=&oi;
             vkUpdateDescriptorSets(device,(uint32_t)w.size(),w.data(),0,nullptr);
         }
     }
@@ -591,7 +657,7 @@ private:
         pipePool  =buildPipeline({"pool.vert","pool.frag",mainPass,gfxLayout,sizeof(glm::vec3),{{0,VK_FORMAT_R32G32B32_SFLOAT,0}},true});
         pipeSphere=buildPipeline({"sphere.vert","sphere.frag",mainPass,gfxLayout,sizeof(glm::vec3),{{0,VK_FORMAT_R32G32B32_SFLOAT,0}},true});
         pipeWater =buildPipeline({"water_surface.vert","water_surface.frag",mainPass,gfxLayout,sizeof(glm::vec2),{{0,VK_FORMAT_R32G32_SFLOAT,0}},true});
-        pipeObject=buildPipeline({"object.vert","object.frag",mainPass,gfxLayout,6*sizeof(float),{{0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,VK_FORMAT_R32G32B32_SFLOAT,3*sizeof(float)}},true});
+        pipeObject=buildPipeline({"object.vert","object.frag",mainPass,gfxLayout,8*sizeof(float),{{0,VK_FORMAT_R32G32B32_SFLOAT,0},{1,VK_FORMAT_R32G32B32_SFLOAT,3*sizeof(float)},{2,VK_FORMAT_R32G32_SFLOAT,6*sizeof(float)}},true});
     }
 
     // ---------------- glTF object ----------------
@@ -616,14 +682,41 @@ private:
         glm::vec3 bsCenter=(mn+mx)*0.5f; float bsRadius=0.0f;
         for(auto& p:P) bsRadius=std::max(bsRadius,glm::length(p-bsCenter));
         if(bsRadius<1e-6f) bsRadius=1.0f;
-        std::vector<float> verts; verts.reserve(vc*6);
+        bool haveUV = g.uvs.size()==vc*2;
+        std::vector<float> verts; verts.reserve(vc*8);
         for(size_t i=0;i<vc;++i){ verts.push_back(P[i].x); verts.push_back(P[i].y); verts.push_back(P[i].z);
-                                  verts.push_back(N[i].x); verts.push_back(N[i].y); verts.push_back(N[i].z); }
+                                  verts.push_back(N[i].x); verts.push_back(N[i].y); verts.push_back(N[i].z);
+                                  verts.push_back(haveUV?g.uvs[i*2]:0.0f); verts.push_back(haveUV?g.uvs[i*2+1]:0.0f); }
         objectVB=uploadBuffer(verts.data(),verts.size()*sizeof(float),VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
         objectIB=uploadBuffer(I.data(),I.size()*sizeof(uint32_t),VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
         objectIndexCount=(uint32_t)I.size();
+
+        // ---- base-colour texture (decode PNG -> RGBA8) ----
+        if(!g.baseColorImage.empty()){
+            png::Image tex=png::decode(g.baseColorImage.data(),g.baseColorImage.size());
+            if(tex.ok){ destroyImage(objTex); objTex=make2DTexture((uint32_t)tex.w,(uint32_t)tex.h,tex.rgba);
+                        std::cerr<<"object texture: "<<tex.w<<"x"<<tex.h<<"\n"; }
+            else std::cerr<<"object texture decode failed: "<<tex.error<<"\n";
+        }
         float s=SPHERE_RADIUS/bsRadius;
         objectBaseModel=glm::scale(glm::mat4(1.0f),glm::vec3(s))*glm::translate(glm::mat4(1.0f),-bsCenter);
+
+        // ---- bake an unsigned distance field for refraction (object-base space) ----
+        // object-base space = objectBaseModel * P = s*(P - bsCenter). World = that + sphereCenter
+        // (per-frame transform is a pure translation), so distances are in world units directly.
+        std::vector<glm::vec3> L(vc);
+        for(size_t i=0;i<vc;++i) L[i]=(P[i]-bsCenter)*s;
+        glm::vec3 lmn(1e9f),lmx(-1e9f); for(auto& p:L){ lmn=glm::min(lmn,p); lmx=glm::max(lmx,p); }
+        const int UDF_RES=48;
+        glm::vec3 ext=lmx-lmn; float vox=std::max(ext.x,std::max(ext.y,ext.z))/(float)UDF_RES;
+        lmn=lmn-glm::vec3(2.0f*vox); lmx=lmx+glm::vec3(2.0f*vox);   // pad so the surface has gradient room
+        std::cerr<<"baking object SDF "<<UDF_RES<<"^3 ...\n";
+        udf::Field fld=udf::bake(L,I,lmn,lmx,UDF_RES);
+        destroyImage(udf);
+        udf=makeUDFImage(UDF_RES,fld.data);
+        objLocalMin=lmn; objLocalMax=lmx; objVoxel=fld.voxel;
+        writeDescriptors();   // re-point binding 4 to the real field
+
         hasObject=true;
         std::cerr<<"glTF loaded: "<<objectIndexCount/3<<" tris\n";
     }
@@ -733,6 +826,12 @@ private:
         u.sphere=glm::vec4(sphereCenter,SPHERE_RADIUS);
         float t=std::chrono::duration<float>(std::chrono::high_resolution_clock::now()-startTime).count();
         u.misc=glm::vec4(t,(float)poolShape,0,0);
+        if(hasObject){
+            u.objMin=glm::vec4(objLocalMin+sphereCenter,1.0f);   // world AABB = local + translation
+            u.objMax=glm::vec4(objLocalMax+sphereCenter,objVoxel);
+        } else {
+            u.objMin=glm::vec4(0,0,0,0); u.objMax=glm::vec4(0,0,0,1);
+        }
         std::memcpy(uboBuffer.mapped,&u,sizeof(u));
     }
     void setFullViewport(uint32_t w,uint32_t h){ VkViewport vp{0,0,(float)w,(float)h,0.0f,1.0f}; VkRect2D sc{{0,0},{w,h}}; vkCmdSetViewport(cmd,0,1,&vp); vkCmdSetScissor(cmd,0,1,&sc); }
@@ -855,7 +954,7 @@ private:
         destroyBuffer(uboBuffer);
         vkDestroyDescriptorPool(device,descPool,nullptr); vkDestroyDescriptorSetLayout(device,setLayout,nullptr);
         vkDestroySampler(device,sampler,nullptr); vkDestroySampler(device,tileSampler,nullptr);
-        destroyImage(tiles); destroyImage(caustic); vkDestroyFramebuffer(device,causticFB,nullptr);
+        destroyImage(tiles); destroyImage(caustic); destroyImage(udf); destroyImage(objTex); vkDestroyFramebuffer(device,causticFB,nullptr);
         for(int i=0;i<2;++i){ vkDestroyFramebuffer(device,waterFB[i],nullptr); destroyImage(water[i]); }
         for(auto fb:mainFramebuffers) vkDestroyFramebuffer(device,fb,nullptr);
         destroyImage(depthImage);
