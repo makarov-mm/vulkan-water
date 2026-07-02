@@ -777,10 +777,10 @@ private:
             std::vector<glm::vec3> pv; std::vector<uint32_t> pi; const uint32_t SEG = 64; const float F = -1.0f, U = 0.0f;
             uint32_t center = (uint32_t)pv.size(); pv.push_back({ 0,F,0 });
             uint32_t ring0 = (uint32_t)pv.size();
-            for (uint32_t i = 0; i <= SEG; ++i) { float a = (float)i / SEG * glm::two_pi<float>(); pv.push_back({ std::cos(a),F,std::sin(a) }); }
+            for (uint32_t i = 0; i <= SEG; ++i) { float a = (float)i / SEG * std::numbers::pi_v<float> * 2; pv.push_back({ std::cos(a),F,std::sin(a) }); }
             for (uint32_t i = 0; i < SEG; ++i) { pi.push_back(center); pi.push_back(ring0 + i); pi.push_back(ring0 + i + 1); }
             for (uint32_t i = 0; i < SEG; ++i) {
-                float a = (float)i / SEG * glm::two_pi<float>(), a2 = (float)(i + 1) / SEG * glm::two_pi<float>();
+                float a = (float)i / SEG * std::numbers::pi_v<float> * 2, a2 = (float)(i + 1) / SEG * std::numbers::pi_v<float> * 2;
                 glm::vec3 b0{ std::cos(a),F,std::sin(a) }, b1{ std::cos(a2),F,std::sin(a2) }, t0{ std::cos(a),U,std::sin(a) }, t1{ std::cos(a2),U,std::sin(a2) };
                 uint32_t base = (uint32_t)pv.size(); pv.push_back(b0); pv.push_back(t0); pv.push_back(t1); pv.push_back(b1);
                 pi.push_back(base); pi.push_back(base + 1); pi.push_back(base + 2); pi.push_back(base); pi.push_back(base + 2); pi.push_back(base + 3);
@@ -793,9 +793,9 @@ private:
         // built-in sphere (fallback object)
         std::vector<glm::vec3> sv; std::vector<uint32_t> sidx; const uint32_t STK = 32, SEC = 48;
         for (uint32_t i = 0; i <= STK; ++i) {
-            float phi = (float)i / STK * glm::pi<float>();
+            float phi = (float)i / STK * std::numbers::pi_v<float>;
             for (uint32_t j = 0; j <= SEC; ++j) {
-                float th = (float)j / SEC * glm::two_pi<float>();
+                float th = (float)j / SEC * std::numbers::pi_v<float> * 2;
                 sv.emplace_back(std::sin(phi) * std::cos(th), std::cos(phi), std::sin(phi) * std::sin(th));
             }
         }

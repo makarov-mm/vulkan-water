@@ -6,41 +6,81 @@
 #include <vector>
 #include <utility>
 #include <fstream>
-#include <cstdint>
-#include <cstring>
 #include <cstdlib>
 
 namespace gltfmin {
 
 struct Result {
-    std::vector<float>    positions;   // xyz * N
-    std::vector<float>    normals;     // xyz * N (empty if absent)
-    std::vector<float>    uvs;         // uv  * N (empty if absent)
-    std::vector<uint32_t> indices;     // empty if non-indexed
-    std::vector<uint8_t>  baseColorImage;  // raw encoded bytes of the base-colour texture (PNG/JPEG), empty if none
-    bool ok=false;
+    std::vector<float>    positions;      // xyz * N
+    std::vector<float>    normals;        // xyz * N (empty if absent)
+    std::vector<float>    uvs;            // uv  * N (empty if absent)
+    std::vector<uint32_t> indices;        // empty if non-indexed
+    std::vector<uint8_t>  baseColorImage; // raw encoded bytes of the base-colour texture (PNG/JPEG), empty if none
+    bool ok = false;
     std::string error;
 };
 
 // ---------- minimal JSON ----------
 struct JVal {
-    enum T { NUL, BOOL, NUM, STR, ARR, OBJ } t=NUL;
-    bool b=false; double num=0; std::string str;
+    enum T { NUL, BOOL, NUM, STR, ARR, OBJ } t = NUL;
+    bool b = false;
+	double num = 0;
+	std::string str;
     std::vector<JVal> arr;
     std::vector<std::pair<std::string,JVal>> obj;
+
     const JVal* find(const std::string& k) const {
-        for(auto& p:obj) if(p.first==k) return &p.second; return nullptr;
+        for(const auto& [fst, snd]:obj)
+        {
+            if (fst == k)
+            {
+                return &snd;
+            }
+
+        	return nullptr;
+        }
+
+        return nullptr;
     }
-    int    asInt()    const { return (int)num; }
-    double asNum()    const { return num; }
+
+    int asInt() const
+    {
+	    return static_cast<int>(num);
+    }
+
+    double asNum() const
+    {
+	    return num;
+    }
 };
 
 struct JParser {
-    const std::string& s; size_t i=0; bool err=false;
-    JParser(const std::string& src): s(src) {}
-    void ws(){ while(i<s.size()){ char c=s[i]; if(c==' '||c=='\t'||c=='\n'||c=='\r') ++i; else break; } }
-    JVal value(){
-        ws(); if(i>=s.size()){ err=true; return {}; }
+    const std::string& s;
+	size_t i = 0;
+	bool err = false;
+
+    JParser(const std::string& src): s(src) { }
+
+    void ws()
+    {
+	    while(i < s.size())
+	    {
+		    if (const char c = s[i]; c == ' ' || c == '\t' || c == '\n' || c == '\r') 
+                ++i;
+	    	else 
+	    		break;
+	    }
+    }
+
+    JVal value() {
+        ws();
+    	
+    	if(i >= s.size())
+    	{
+    		err = true;
+    		return { };
+    	}
+
         char c=s[i];
         if(c=='{') return object();
         if(c=='[') return array();
@@ -50,6 +90,7 @@ struct JParser {
         if(c=='n'){ i+=4; JVal v; v.t=JVal::NUL; return v; }
         return number();
     }
+
     std::string str(){
         std::string out; ++i; // opening quote
         while(i<s.size()){
@@ -69,11 +110,13 @@ struct JParser {
         }
         return out;
     }
+
     JVal number(){
         size_t start=i;
         while(i<s.size()){ char c=s[i]; if((c>='0'&&c<='9')||c=='-'||c=='+'||c=='.'||c=='e'||c=='E') ++i; else break; }
         JVal v; v.t=JVal::NUM; v.num=strtod(s.substr(start,i-start).c_str(),nullptr); return v;
     }
+
     JVal object(){
         JVal v; v.t=JVal::OBJ; ++i; ws();
         if(i<s.size()&&s[i]=='}'){ ++i; return v; }
@@ -87,6 +130,7 @@ struct JParser {
         }
         return v;
     }
+
     JVal array(){
         JVal v; v.t=JVal::ARR; ++i; ws();
         if(i<s.size()&&s[i]==']'){ ++i; return v; }
@@ -100,7 +144,7 @@ struct JParser {
     }
 };
 
-inline int getInt(const JVal& o, const char* key, int def){
+inline int getInt(const JVal& o, const char* key, int def) {
     const JVal* v=o.find(key); return (v&&v->t==JVal::NUM)? v->asInt() : def;
 }
 
